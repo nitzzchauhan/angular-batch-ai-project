@@ -1,0 +1,11 @@
+{
+  "/gemini": {
+    "target": "https://generativelanguage.googleapis.com",
+    "secure": true,
+    "changeOrigin": true,
+    "pathRewrite": {
+      "^/gemini": ""
+    },
+    "logLevel": "debug"
+  }
+}

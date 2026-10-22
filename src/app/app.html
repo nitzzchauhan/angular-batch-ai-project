@@ -1,0 +1,223 @@
+<div class="flex flex-col min-h-screen">
+  <!-- Sticky Top Bar -->
+  <app-header></app-header>
+
+  <!-- Main Body Content -->
+  <main class="flex-1 w-full max-w-[1536px] mx-auto px-4 sm:px-6 lg:px-8 py-5">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+
+      <!-- LEFT SIDEBAR: Upload, Sample Corpus, Pipeline Standards (col-span-3) -->
+      <aside class="lg:col-span-3 space-y-4">
+        <app-uploader></app-uploader>
+      </aside>
+
+      <!-- RIGHT WORKSPACE: Document Preview + Extracted Fields / HITL Audit (col-span-9) -->
+      <section class="lg:col-span-9 space-y-4">
+        
+        <!-- Active Document Summary Bar -->
+        @if (visionService.currentResult(); as res) {
+          <div class="glass-panel rounded-2xl p-4 flex items-center justify-between flex-wrap gap-3">
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="w-10 h-10 rounded-xl bg-teal-500/10 text-teal-600 dark:text-teal-400 flex items-center justify-center font-bold text-lg shrink-0">
+                📄
+              </div>
+              <div class="min-w-0">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <h2 class="text-sm font-bold text-[var(--color-text)]">
+                    {{ res.classification || res.json_data?.document_type || 'KYC Document' }}
+                  </h2>
+                  @if (res.json_data?.is_handwritten) {
+                    <span class="px-2 py-0.5 rounded-md text-[11px] font-bold ui-pill-warning">
+                      ✍️ Handwritten Form
+                    </span>
+                  } @else {
+                    <span class="px-2 py-0.5 rounded-md text-[11px] font-semibold ui-pill-neutral">
+                      🪪 Printed Statutory ID
+                    </span>
+                  }
+                  @if (visionService.isFallbackActive()) {
+                    <span class="px-2 py-0.5 rounded-md text-[11px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/25">
+                      📋 Ground Truth Fallback
+                    </span>
+                  } @else {
+                    <span class="px-2 py-0.5 rounded-md text-[11px] font-bold bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 border border-emerald-500/25">
+                      ⚡ Gemini Live Vision
+                    </span>
+                  }
+                </div>
+                <div class="flex items-center gap-2 text-xs text-[var(--color-text-secondary)] mt-0.5 truncate">
+                  <span class="font-mono text-[11px]">{{ res.filename }}</span>
+                  <span>·</span>
+                  <span>Overall Confidence: <strong>{{ ((res.json_data?.overall_confidence || 0.95) * 100).toFixed(0) }}%</strong></span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Auditor Action Badges -->
+            <div class="flex items-center gap-2">
+              @if (visionService.flaggedCount() > 0) {
+                <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold ui-pill-warning">
+                  <span class="w-2 h-2 rounded-full bg-amber-600 animate-pulse"></span>
+                  <span>{{ visionService.flaggedCount() }} Review Required</span>
+                </span>
+              } @else {
+                <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold ui-pill-success">
+                  <span>✓</span>
+                  <span>100% Compliant</span>
+                </span>
+              }
+            </div>
+          </div>
+        }
+
+        <!-- Info / Notice State Alert -->
+        @if (visionService.infoBanner(); as info) {
+          <div class="rounded-2xl p-4 ui-banner-warning text-xs space-y-1 shadow-sm">
+            <div class="flex items-center justify-between">
+              <strong class="text-sm flex items-center gap-1.5">
+                <span>📋</span>
+                <span>Pipeline Mode Notice:</span>
+              </strong>
+              <button
+                type="button"
+                (click)="visionService.infoBanner.set(null)"
+                class="text-amber-800 dark:text-amber-200 hover:text-amber-950 font-bold">&times;</button>
+            </div>
+            <p class="leading-relaxed">{{ info }}</p>
+          </div>
+        }
+
+        <!-- Loading State Indicator -->
+        @if (visionService.isLoading()) {
+          <div class="glass-panel rounded-2xl p-6 text-center space-y-3 shadow-md animate-pulse">
+            <div class="w-12 h-12 mx-auto rounded-full border-4 border-teal-500 border-t-transparent animate-spin"></div>
+            <div>
+              <p class="text-sm font-bold text-[var(--color-text)]">Multimodal Document Vision Active</p>
+              <p class="text-xs text-teal-600 dark:text-teal-400 font-semibold mt-1">
+                {{ visionService.loadingStage() }}
+              </p>
+            </div>
+            <div class="max-w-xs mx-auto text-[11px] text-[var(--color-text-secondary)]">
+              Encoding document in browser · Gemini generateContent · HITL scoring
+            </div>
+          </div>
+        }
+
+        <!-- Error State Alert -->
+        @if (visionService.errorMessage(); as err) {
+          <div class="rounded-2xl p-4 ui-banner-danger text-xs space-y-1 shadow-sm">
+            <div class="flex items-center justify-between">
+              <strong class="text-sm">Processing Notice:</strong>
+              <button
+                type="button"
+                (click)="visionService.errorMessage.set(null)"
+                class="text-red-700 dark:text-red-300 hover:text-red-900 font-bold">&times;</button>
+            </div>
+            <p>{{ err }}</p>
+          </div>
+        }
+
+        <!-- Split Screen: Left = Document Viewer, Right = Tabbed Extraction & Audit Workspace -->
+        <div class="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
+          
+          <!-- Document Inspection Viewer (xl:col-span-5) -->
+          <div class="xl:col-span-5">
+            <app-viewer></app-viewer>
+          </div>
+
+          <!-- Extraction & Audit Workspace (xl:col-span-7) -->
+          <div class="xl:col-span-7 space-y-4">
+            
+            <!-- Tab Navigation Bar -->
+            <div class="glass-panel rounded-2xl p-1.5 flex items-center gap-1.5 overflow-x-auto shadow-sm">
+              <button
+                type="button"
+                (click)="switchTab('extracted')"
+                class="result-tab-btn"
+                [class.is-active]="visionService.activeTab() === 'extracted'">
+                <span>Extracted Fields</span>
+              </button>
+
+              <button
+                type="button"
+                (click)="switchTab('flagging')"
+                class="result-tab-btn flex items-center gap-1.5"
+                [class.is-active]="visionService.activeTab() === 'flagging'">
+                <span>HITL Flagging Report</span>
+                @if (visionService.flaggedCount() > 0) {
+                  <span class="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-500 text-white">
+                    {{ visionService.flaggedCount() }}
+                  </span>
+                }
+              </button>
+
+              <button
+                type="button"
+                (click)="switchTab('json')"
+                class="result-tab-btn"
+                [class.is-active]="visionService.activeTab() === 'json'">
+                <span>JSON Schema</span>
+              </button>
+
+              <button
+                type="button"
+                (click)="switchTab('methodology')"
+                class="result-tab-btn"
+                [class.is-active]="visionService.activeTab() === 'methodology'">
+                <span>Handwriting Methodology</span>
+              </button>
+
+              @if (visionService.batchResults()) {
+                <button
+                  type="button"
+                  (click)="switchTab('batch')"
+                  class="result-tab-btn flex items-center gap-1.5"
+                  [class.is-active]="visionService.activeTab() === 'batch'">
+                  <span>Batch Summary</span>
+                  <span class="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-teal-600 text-white">
+                    Corpus
+                  </span>
+                </button>
+              }
+            </div>
+
+            <!-- Tab Content Switcher -->
+            @switch (visionService.activeTab()) {
+              @case ('extracted') {
+                <app-extracted-fields></app-extracted-fields>
+              }
+              @case ('flagging') {
+                <app-flagging-report></app-flagging-report>
+              }
+              @case ('json') {
+                <app-json-viewer></app-json-viewer>
+              }
+              @case ('methodology') {
+                <app-methodology></app-methodology>
+              }
+              @case ('batch') {
+                <app-batch-summary></app-batch-summary>
+              }
+            }
+          </div>
+
+        </div>
+
+      </section>
+
+    </div>
+  </main>
+
+  <!-- Global Footer -->
+  <footer class="glass-bar mt-auto py-3 px-6 text-center text-xs text-[var(--color-text-secondary)] border-t border-[var(--color-border)] flex items-center justify-between flex-wrap gap-2">
+    <div class="flex items-center gap-2">
+      <span class="font-bold text-[var(--color-text)]">Task 3 · Multimodal Document Vision Pipeline</span>
+      <span>·</span>
+      <span>Angular 21 Standalone App</span>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <span class="text-teal-600 dark:text-teal-400 font-semibold">Gemini runs in this browser</span>
+    </div>
+  </footer>
+</div>

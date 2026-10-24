@@ -576,59 +576,44 @@ export class DocumentVisionService {
 
   correctField(key: string, newValue: string): void {
     const res = this.currentResult();
-    if (!res || !res.json_data) return;
+    const extracted = res?.json_data?.extracted_data || res?.json_data?.fields;
+    if (!res || !extracted || !(key in extracted)) return;
 
-    const extracted = res.json_data.extracted_data || res.json_data.fields;
-    if (!extracted || !(key in extracted)) return;
-
-    const updatedExtracted = { ...extracted };
-    const currentItem = updatedExtracted[key];
-
-    if (typeof currentItem === 'object' && currentItem !== null) {
-      updatedExtracted[key] = {
-        ...currentItem,
+    const currentItem = extracted[key];
+    const itemObj = typeof currentItem === 'object' && currentItem !== null ? currentItem : {};
+    const updatedExtracted = {
+      ...extracted,
+      [key]: {
+        ...itemObj,
         value: newValue,
         corrected: true,
         confidence: 1.0,
         confidence_score: 1.0,
         flagged: false
-      };
-    } else {
-      updatedExtracted[key] = {
-        value: newValue,
-        corrected: true,
-        confidence: 1.0,
-        confidence_score: 1.0,
-        flagged: false
-      };
-    }
+      }
+    };
 
-    const oldReport = res.flagging_report;
-    const oldFlagged = oldReport?.flagged_fields || [];
-    const remainingFlagged = oldFlagged.filter(
+    const remainingFlagged = (res.flagging_report?.flagged_fields || []).filter(
       (f) => f.field_name !== key && f.name !== key
     );
-
-    const updatedReport: FlaggingReport = {
-      ...oldReport,
-      confidence_threshold: oldReport?.confidence_threshold ?? this.confidenceThreshold(),
-      flagged_fields: remainingFlagged,
-      flagged_count: remainingFlagged.length,
-      needs_human_review: remainingFlagged.length > 0
-    };
 
     const updatedResult: ProcessDocumentResponse = {
       ...res,
       json_data: {
-        ...res.json_data,
+        ...res.json_data!,
         extracted_data: updatedExtracted,
         needs_human_review: remainingFlagged.length > 0
       },
-      flagging_report: updatedReport
+      flagging_report: {
+        ...res.flagging_report,
+        confidence_threshold: res.flagging_report?.confidence_threshold ?? this.confidenceThreshold(),
+        flagged_fields: remainingFlagged,
+        flagged_count: remainingFlagged.length,
+        needs_human_review: remainingFlagged.length > 0
+      }
     };
 
     this.currentResult.set(updatedResult);
-
     if (res.filename) {
       this.updateCache(res.filename, updatedResult);
     }
@@ -637,16 +622,17 @@ export class DocumentVisionService {
   setThreshold(val: number): void {
     this.confidenceThreshold.set(val);
     const res = this.currentResult();
-    if (!res || !res.json_data) return;
+    const extracted = res?.json_data?.extracted_data || res?.json_data?.fields;
+    if (!res || !extracted) return;
 
-    const extracted = res.json_data.extracted_data || res.json_data.fields || {};
-    const newFlagged: FlaggedField[] = [];
-
-    Object.keys(extracted).forEach((k) => {
-      const item = extracted[k];
-      const score = item?.confidence_score ?? item?.confidence ?? 1.0;
-      if (score < val && !item?.corrected) {
-        newFlagged.push({
+    const newFlagged: FlaggedField[] = Object.entries(extracted)
+      .filter(([_, item]) => {
+        const score = item?.confidence_score ?? item?.confidence ?? 1.0;
+        return score < val && !item?.corrected;
+      })
+      .map(([k, item]) => {
+        const score = item?.confidence_score ?? item?.confidence ?? 1.0;
+        return {
           document_name: res.filename,
           document_type: res.classification,
           field_name: k,
@@ -655,21 +641,18 @@ export class DocumentVisionService {
           threshold: val,
           reason: `Confidence score (${(score * 100).toFixed(0)}%) is below calibrated ${val} threshold.`,
           recommended_action: 'Human auditor verification required.'
-        });
-      }
-    });
-
-    const updatedReport: FlaggingReport = {
-      ...res.flagging_report,
-      confidence_threshold: val,
-      flagged_fields: newFlagged,
-      flagged_count: newFlagged.length,
-      needs_human_review: newFlagged.length > 0
-    };
+        };
+      });
 
     this.currentResult.set({
       ...res,
-      flagging_report: updatedReport
+      flagging_report: {
+        ...res.flagging_report,
+        confidence_threshold: val,
+        flagged_fields: newFlagged,
+        flagged_count: newFlagged.length,
+        needs_human_review: newFlagged.length > 0
+      }
     });
   }
 

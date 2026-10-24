@@ -8,8 +8,7 @@ const STORAGE_KEY = 'gemini_api_key_override';
 
 interface GeminiResponse {
   candidates?: Array<{
-    content?: { parts?: Array<{ text?: string; thoughtSignature?: string }> };
-    finishReason?: string;
+    content?: { parts?: Array<{ text?: string }> };
   }>;
   error?: { message?: string; code?: number; status?: string };
 }
@@ -40,7 +39,7 @@ export class GeminiVisionService {
   readonly envKeyCount = environment.geminiApiKeys?.length || (environment.geminiApiKey ? 1 : 0);
   readonly configured = computed(() => this.resolveKeys().length > 0);
 
-  // Model fallback candidates when a model experiences high demand (503) or unavailability
+  // Fallback models when experiencing high demand (503) or unavailability
   readonly modelCandidates = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.8-flash'];
 
   constructor(private http: HttpClient) {}
@@ -55,35 +54,23 @@ export class GeminiVisionService {
         localStorage.removeItem(STORAGE_KEY);
       }
     } catch {
-      // Ignore storage failures (private mode).
+      // Ignore storage errors in private browsing
     }
   }
 
   resolveKeys(): string[] {
-    const keys: string[] = [];
-    const seen = new Set<string>();
-    const override = this.apiKey().trim();
-    const fromEnv = [
-      environment.geminiApiKey,
-      ...(environment.geminiApiKeys || [])
-    ]
-      .map((item) => (item || '').trim())
-      .filter(Boolean);
-
-    for (const key of [override, ...fromEnv]) {
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      keys.push(key);
-    }
-    return keys;
+    const rawKeys = [
+      this.apiKey().trim(),
+      environment.geminiApiKey?.trim(),
+      ...(environment.geminiApiKeys || []).map((k) => k?.trim())
+    ];
+    return Array.from(new Set(rawKeys.filter(Boolean) as string[]));
   }
 
   async analyzeBlob(blob: Blob, filename: string, threshold: number): Promise<ProcessDocumentResponse> {
     const keys = this.resolveKeys();
     if (!keys.length) {
-      throw new Error(
-        'No Gemini API key found. Add GEMINI_API_KEY to the env file, then restart npm start.'
-      );
+      throw new Error('No Gemini API key found. Add GEMINI_API_KEY to the env file, then restart npm start.');
     }
 
     const mimeType = blob.type || this.guessMime(filename);
@@ -104,54 +91,23 @@ export class GeminiVisionService {
       }
     };
 
-    // Build unique model sequence starting with currently configured model
-    const requestedModel = this.model();
-    const modelsToTry = [
-      requestedModel,
-      ...this.modelCandidates.filter((m) => m !== requestedModel)
-    ];
-
+    // Try selected model first, followed by remaining candidate fallbacks
+    const modelsToTry = [this.model(), ...this.modelCandidates.filter((m) => m !== this.model())];
     let lastError: Error | null = null;
 
     for (const currentModel of modelsToTry) {
-      for (let i = 0; i < keys.length; i++) {
-        const encodedKey = encodeURIComponent(keys[i]);
-        const endpoints = [
-          `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${encodedKey}`,
-          `/gemini/v1beta/models/${currentModel}:generateContent?key=${encodedKey}`
-        ];
+      for (const key of keys) {
+        try {
+          const text = await this.executeGenerateContent(currentModel, key, body);
+          return this.toProcessResponse(this.parseModelJson(text), filename, threshold, currentModel);
+        } catch (err) {
+          lastError = this.normalizeError(err);
 
-        for (const url of endpoints) {
-          try {
-            const resp = await firstValueFrom(this.http.post<GeminiResponse>(url, body));
-            if (resp?.error?.message) {
-              throw new Error(resp.error.message);
-            }
-            const text = resp?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('') || '';
-            if (!text.trim()) {
-              throw new Error('Gemini returned an empty response.');
-            }
-            return this.toProcessResponse(this.parseModelJson(text), filename, threshold, currentModel);
-          } catch (err) {
-            lastError = this.normalizeError(err);
-            const status = err instanceof HttpErrorResponse ? err.status : undefined;
-
-            // If key is rate-limited or permission denied, rotate key
-            if (this.shouldRotateKey(err, lastError)) {
-              if (i < keys.length - 1) {
-                break; // Try next key for current model
-              }
-            }
-
-            // If model is overloaded or unavailable (503/404), advance to next model
-            if (this.isModelOverloadedOrNotFound(err, lastError)) {
-              break; // Try next model candidate
-            }
-
-            if (status && status !== 0 && status !== 503 && status !== 429 && status !== 404) {
-              throw lastError;
-            }
+          // If current model is overloaded or unavailable, switch directly to next model
+          if (this.isModelUnavailable(err, lastError)) {
+            break;
           }
+          // Otherwise continue to next available API key in the pool
         }
       }
     }
@@ -159,7 +115,37 @@ export class GeminiVisionService {
     throw lastError ?? new Error('Gemini request failed across all key and model failovers.');
   }
 
-  private isModelOverloadedOrNotFound(err: unknown, normalized: Error): boolean {
+  private async executeGenerateContent(model: string, key: string, body: unknown): Promise<string> {
+    const encodedKey = encodeURIComponent(key);
+    const endpoints = [
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodedKey}`,
+      `/gemini/v1beta/models/${model}:generateContent?key=${encodedKey}`
+    ];
+
+    let lastErr: unknown;
+    for (const url of endpoints) {
+      try {
+        const resp = await firstValueFrom(this.http.post<GeminiResponse>(url, body));
+        if (resp?.error?.message) {
+          throw new Error(resp.error.message);
+        }
+        const text = resp?.candidates?.[0]?.content?.parts?.map((p) => p.text || '').join('').trim();
+        if (!text) {
+          throw new Error('Gemini returned an empty response.');
+        }
+        return text;
+      } catch (err) {
+        lastErr = err;
+        // If HTTP status is a real response from Gemini (e.g. 403, 404, 429, 503), don't repeat against proxy
+        if (err instanceof HttpErrorResponse && err.status !== 0) {
+          throw err;
+        }
+      }
+    }
+    throw lastErr;
+  }
+
+  private isModelUnavailable(err: unknown, normalized: Error): boolean {
     const status = err instanceof HttpErrorResponse ? err.status : 0;
     const msg = normalized.message.toLowerCase();
     return (
@@ -167,29 +153,7 @@ export class GeminiVisionService {
       status === 404 ||
       msg.includes('high demand') ||
       msg.includes('unavailable') ||
-      msg.includes('no longer available') ||
       msg.includes('not found')
-    );
-  }
-
-  private shouldRotateKey(err: unknown, normalized: Error): boolean {
-    const status = err instanceof HttpErrorResponse ? err.status : 0;
-    const apiStatus =
-      err instanceof HttpErrorResponse ? String(err.error?.error?.status || '') : '';
-    const message = normalized.message.toLowerCase();
-    return (
-      status === 429 ||
-      status === 403 ||
-      status === 503 ||
-      apiStatus === 'RESOURCE_EXHAUSTED' ||
-      apiStatus === 'PERMISSION_DENIED' ||
-      apiStatus === 'UNAVAILABLE' ||
-      message.includes('quota') ||
-      message.includes('rate') ||
-      message.includes('exhausted') ||
-      message.includes('high demand') ||
-      message.includes('unavailable') ||
-      message.includes('api key')
     );
   }
 
@@ -220,16 +184,21 @@ export class GeminiVisionService {
   }
 
   private parseModelJson(text: string): GeminiExtract {
-    const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    const start = trimmed.indexOf('{');
-    const end = trimmed.lastIndexOf('}');
+    const cleaned = text.replace(/```(?:json)?/gi, '').trim();
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
     if (start === -1 || end === -1) {
-      throw new Error('Gemini did not return JSON.');
+      throw new Error('Gemini did not return valid JSON.');
     }
-    return JSON.parse(trimmed.slice(start, end + 1)) as GeminiExtract;
+    return JSON.parse(cleaned.slice(start, end + 1)) as GeminiExtract;
   }
 
-  private toProcessResponse(raw: GeminiExtract, filename: string, threshold: number, activeModel?: string): ProcessDocumentResponse {
+  private toProcessResponse(
+    raw: GeminiExtract,
+    filename: string,
+    threshold: number,
+    activeModel?: string
+  ): ProcessDocumentResponse {
     const isHw = raw.is_handwritten === true;
     const docType = raw.document_type || 'Unknown Document';
     const isSupported = raw.is_supported !== false;
@@ -239,27 +208,21 @@ export class GeminiVisionService {
     const entries = this.normalizeFields(raw.fields);
     for (const field of entries) {
       const displayName = field.name || 'field';
-      const key = this.normalizeKey(displayName);
+      const key = displayName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
       let value = field.value ?? '';
-      let confidence = this.clampConfidence(field.confidence, isHw ? 0.86 : 0.96);
+      let confidence = Math.min(1, Math.max(0, typeof field.confidence === 'number' ? field.confidence : (isHw ? 0.86 : 0.96)));
 
       if (this.looksLikeAadhaar(displayName, value)) {
         value = '[Aadhaar Redacted]';
         confidence = Math.max(confidence, 0.99);
       }
 
-      const method =
-        field.method || (isHw ? 'gemini-vision-handwriting-ocr' : 'gemini-vision-printed-ocr');
+      const method = field.method || (isHw ? 'gemini-vision-handwriting-ocr' : 'gemini-vision-printed-ocr');
+      const flagged = confidence < threshold;
 
-      extractedData[key] = {
-        value,
-        confidence,
-        confidence_score: confidence,
-        method,
-        flagged: confidence < threshold
-      };
+      extractedData[key] = { value, confidence, confidence_score: confidence, method, flagged };
 
-      if (confidence < threshold) {
+      if (flagged) {
         flaggedFields.push({
           document_name: filename,
           document_type: docType,
@@ -275,11 +238,9 @@ export class GeminiVisionService {
       }
     }
 
-    const fieldScores = Object.values(extractedData).map((f) => f.confidence_score ?? f.confidence ?? 0);
-    const overall =
-      raw.overall_confidence ??
-      (fieldScores.length ? fieldScores.reduce((a, b) => a + b, 0) / fieldScores.length : 0.9);
-
+    const scores = Object.values(extractedData).map((f) => f.confidence_score ?? f.confidence ?? 0);
+    const avgScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : 0.9;
+    const overall = Number((raw.overall_confidence ?? avgScore).toFixed(2));
     const needsReview = !isSupported || flaggedFields.length > 0;
 
     return {
@@ -291,9 +252,9 @@ export class GeminiVisionService {
       json_data: {
         document_filename: filename,
         document_type: docType,
-        classification_confidence: this.clampConfidence(raw.classification_confidence, 0.95),
+        classification_confidence: raw.classification_confidence ?? 0.95,
         is_handwritten: isHw,
-        overall_confidence: Number(this.clampConfidence(overall, 0.9).toFixed(2)),
+        overall_confidence: overall,
         extracted_data: extractedData,
         needs_human_review: needsReview,
         is_supported: isSupported,
@@ -326,49 +287,32 @@ export class GeminiVisionService {
   private normalizeFields(fields?: GeminiExtract['fields']): GeminiField[] {
     if (!fields) return [];
     if (Array.isArray(fields)) return fields;
-    return Object.entries(fields).map(([name, value]) => {
-      if (value && typeof value === 'object') {
-        return { name, ...(value as GeminiField) };
-      }
-      return { name, value: value as string | number | null };
-    });
+    return Object.entries(fields).map(([name, val]) =>
+      typeof val === 'object' && val !== null ? { name, ...(val as GeminiField) } : { name, value: val as string | number | null }
+    );
   }
 
-  private normalizeKey(raw: string): string {
-    return raw
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '');
-  }
-
-  private clampConfidence(value: number | undefined, fallback: number): number {
-    if (typeof value !== 'number' || Number.isNaN(value)) return fallback;
-    return Math.min(1, Math.max(0, value));
-  }
-
-  private looksLikeAadhaar(name: string, value: string | number | null): boolean {
-    if (name.toLowerCase().includes('aadhaar') || name.toLowerCase().includes('aadhar')) {
-      return true;
-    }
-    return /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/.test(String(value ?? ''));
+  private looksLikeAadhaar(name: string, value: unknown): boolean {
+    return /aadha?r/i.test(name) || /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/.test(String(value ?? ''));
   }
 
   private guessMime(filename: string): string {
-    const lower = filename.toLowerCase();
-    if (lower.endsWith('.pdf')) return 'application/pdf';
-    if (lower.endsWith('.png')) return 'image/png';
-    if (lower.endsWith('.webp')) return 'image/webp';
-    if (lower.endsWith('.gif')) return 'image/gif';
-    return 'image/jpeg';
+    const ext = filename.split('.').pop()?.toLowerCase();
+    switch (ext) {
+      case 'pdf': return 'application/pdf';
+      case 'png': return 'image/png';
+      case 'webp': return 'image/webp';
+      case 'gif': return 'image/gif';
+      default: return 'image/jpeg';
+    }
   }
 
   private blobToBase64(blob: Blob): Promise<string> {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => {
-        const result = String(reader.result || '');
-        const comma = result.indexOf(',');
-        resolve(comma >= 0 ? result.slice(comma + 1) : result);
+        const res = reader.result as string;
+        resolve(res.slice(res.indexOf(',') + 1));
       };
       reader.onerror = () => reject(new Error('Could not read the document as base64.'));
       reader.readAsDataURL(blob);
@@ -385,19 +329,12 @@ export class GeminiVisionService {
 
   private normalizeError(err: unknown): Error {
     if (err instanceof HttpErrorResponse) {
-      const apiMessage =
-        err.error?.error?.message ||
-        err.error?.error ||
-        err.error?.message ||
-        err.message;
       if (err.status === 0) {
-        return new Error(
-          'The browser could not reach Gemini. Check your network, CORS, and access to generativelanguage.googleapis.com.'
-        );
+        return new Error('Could not reach Gemini. Check network connection or CORS configuration.');
       }
-      return new Error(typeof apiMessage === 'string' ? apiMessage : `Gemini HTTP ${err.status}`);
+      const msg = err.error?.error?.message || err.error?.message || err.message;
+      return new Error(typeof msg === 'string' ? msg : `Gemini HTTP ${err.status}`);
     }
-    if (err instanceof Error) return err;
-    return new Error(String(err));
+    return err instanceof Error ? err : new Error(String(err));
   }
 }

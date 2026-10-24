@@ -154,7 +154,7 @@ export class BatchSummaryComponent {
     const cached = this.visionService.batchCache()[filename];
     if (cached) {
       this.visionService.currentResult.set(cached);
-      this.visionService.selectSample(filename, false);
+      this.visionService.previewLabel.set(filename);
       this.visionService.activeTab.set('extracted');
     }
   }

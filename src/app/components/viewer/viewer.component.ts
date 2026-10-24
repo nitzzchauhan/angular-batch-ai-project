@@ -22,12 +22,15 @@ import { DocumentVisionService } from '../../services/document-vision.service';
               {{ visionService.previewLabel() || 'Document Preview' }}
             </h2>
             <div class="flex items-center gap-2 text-[10px] text-[var(--color-text-secondary)]">
-              @if (visionService.isHandwritten()) {
-                <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ui-pill-warning">✍️ Handwritten Form</span>
-              } @else {
-                <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold ui-pill-neutral">🪪 Printed KYC Proof</span>
+              @if (visionService.currentResult()) {
+                @if (visionService.isHandwritten()) {
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ui-pill-warning">✍️ Handwritten Form</span>
+                } @else {
+                  <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold ui-pill-neutral">🪪 Printed KYC Proof</span>
+                }
+                <span>·</span>
               }
-              <span>· Zoom: {{ (zoomLevel() * 100).toFixed(0) }}%</span>
+              <span>Zoom: {{ (zoomLevel() * 100).toFixed(0) }}%</span>
             </div>
           </div>
         </div>
@@ -110,8 +113,12 @@ import { DocumentVisionService } from '../../services/document-vision.service';
               [style.transform-origin]="'center top'">
           }
         } @else {
-          <div class="text-center p-6 text-[var(--color-text-muted)]">
-            <p class="text-xs">No document selected</p>
+          <div class="text-center p-8 text-[var(--color-text-muted)] space-y-2">
+            <div class="w-12 h-12 mx-auto rounded-full bg-teal-500/10 text-teal-600 dark:text-teal-400 flex items-center justify-center text-xl">
+              📄
+            </div>
+            <p class="text-xs font-semibold text-[var(--color-text)]">No Document Uploaded</p>
+            <p class="text-[11px] text-[var(--color-text-secondary)]">Drop or upload a KYC document or proposal form to preview and analyze.</p>
           </div>
         }
       </div>

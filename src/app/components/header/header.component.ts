@@ -23,13 +23,8 @@ import { GeminiVisionService } from '../../services/gemini-vision.service';
       </div>
 
       <div class="flex items-center gap-2.5 shrink-0">
-        <!-- Live Gemini vs Fallback Status Pill -->
-        @if (visionService.isFallbackActive()) {
-          <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/20 shadow-sm" title="Operating with verified offline ground truth answer key">
-            <span class="w-2 h-2 rounded-full bg-amber-500"></span>
-            <span>📋 Ground Truth Mode</span>
-          </div>
-        } @else if (gemini.configured()) {
+        <!-- Live Gemini Status Pill -->
+        @if (gemini.configured()) {
           <div class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono font-semibold bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 border border-emerald-500/20 shadow-sm" title="Connected to Google Gemini API with automated multi-key failover">
             <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
             <span>⚡ {{ gemini.model() }} ({{ gemini.resolveKeys().length }} keys)</span>

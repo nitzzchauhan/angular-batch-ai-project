@@ -35,15 +35,9 @@
                       🪪 Printed Statutory ID
                     </span>
                   }
-                  @if (visionService.isFallbackActive()) {
-                    <span class="px-2 py-0.5 rounded-md text-[11px] font-bold bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/25">
-                      📋 Ground Truth Fallback
-                    </span>
-                  } @else {
-                    <span class="px-2 py-0.5 rounded-md text-[11px] font-bold bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 border border-emerald-500/25">
-                      ⚡ Gemini Live Vision
-                    </span>
-                  }
+                  <span class="px-2 py-0.5 rounded-md text-[11px] font-bold bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 border border-emerald-500/25">
+                    ⚡ Gemini Live Vision
+                  </span>
                 </div>
                 <div class="flex items-center gap-2 text-xs text-[var(--color-text-secondary)] mt-0.5 truncate">
                   <span class="font-mono text-[11px]">{{ res.filename }}</span>
